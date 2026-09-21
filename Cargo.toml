@@ -1,0 +1,28 @@
+[package]
+name = "picrew-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Listen agent for PiCrew: OpenCode on this box, the hub dials in."
+repository = "https://github.com/aedan/picrew-agent"
+readme = "README.md"
+
+[[bin]]
+name = "picrew-agent"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs", "io-util", "signal", "process", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
