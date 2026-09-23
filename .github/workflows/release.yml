@@ -30,3 +30,23 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             picrew-agent-x86_64-unknown-linux-musl
+
+  darwin-arm64:
+    runs-on: macos-14
+    needs: linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - run: cargo build --release --target aarch64-apple-darwin
+      - name: asset
+        run: |
+          cp target/aarch64-apple-darwin/release/picrew-agent \
+            picrew-agent-aarch64-apple-darwin
+          chmod +x picrew-agent-aarch64-apple-darwin
+      - name: upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" picrew-agent-aarch64-apple-darwin --clobber

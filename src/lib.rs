@@ -125,6 +125,7 @@ async fn rpc(
         "exec" => exec(&agent, body.payload.unwrap_or(json!({}))).await.into_response(),
         "config" => config(body.payload.unwrap_or(json!({}))).await.into_response(),
         "update" => update(body.payload.unwrap_or(json!({}))).await.into_response(),
+        "requests" => list_requests(&agent).into_response(),
         _ => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": "unknown kind" })),
@@ -347,6 +348,33 @@ async fn latest_tag() -> Result<String, String> {
         .and_then(|t| t.as_str())
         .map(|s| s.trim_start_matches('v').to_string())
         .ok_or_else(|| "no tag_name".into())
+}
+
+fn requests_dir(agent: &Agent) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join("Library/Application Support/picrew-agent/requests")
+    } else {
+        PathBuf::from("/var/lib/picrew/requests")
+    }
+}
+
+fn list_requests(agent: &Agent) -> impl IntoResponse {
+    let dir = requests_dir(agent);
+    let _ = std::fs::create_dir_all(&dir);
+    let mut items = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Ok(text) = std::fs::read_to_string(e.path()) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                        items.push(json!({ "file": e.file_name().to_string_lossy(), "body": v }));
+                    }
+                }
+            }
+        }
+    }
+    (StatusCode::OK, Json(json!({ "ok": true, "requests": items }))).into_response()
 }
 
 fn dirs_config() -> PathBuf {
