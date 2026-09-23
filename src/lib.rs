@@ -350,7 +350,7 @@ async fn latest_tag() -> Result<String, String> {
         .ok_or_else(|| "no tag_name".into())
 }
 
-fn requests_dir(agent: &Agent) -> PathBuf {
+fn requests_dir(_agent: &Agent) -> PathBuf {
     if cfg!(target_os = "macos") {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
         PathBuf::from(home).join("Library/Application Support/picrew-agent/requests")

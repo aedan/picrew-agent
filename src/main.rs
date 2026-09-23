@@ -29,6 +29,10 @@ struct Cli {
     /// Directory whose children are repos.
     #[arg(long, env = "PICREW_PROJECTS", default_value = "/srv/projects")]
     projects: PathBuf,
+    #[arg(long, env = "PICREW_TLS_CERT")]
+    tls_cert: Option<PathBuf>,
+    #[arg(long, env = "PICREW_TLS_KEY")]
+    tls_key: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -60,11 +64,31 @@ async fn main() {
         .expect("bind address");
     tracing::info!("picrew-agent {name} {} listening on {addr} (hub connects here)", picrew_agent::VERSION);
     tokio::spawn(picrew_agent::auto_update_loop());
-    let listener = TcpListener::bind(addr).await.expect("bind");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .expect("serve");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let tls = match (cli.tls_cert, cli.tls_key) {
+        (Some(cert), Some(key)) if cert.is_file() && key.is_file() => Some((cert, key)),
+        (Some(cert), Some(key)) => {
+            tracing::error!("TLS files missing: {} / {}", cert.display(), key.display());
+            std::process::exit(2);
+        }
+        _ => None,
+    };
+    if let Some((cert, key)) = tls {
+        let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key)
+            .await
+            .expect("tls cert");
+        tracing::info!("TLS on");
+        axum_server::bind_rustls(addr, config)
+            .serve(app.into_make_service())
+            .await
+            .expect("serve tls");
+    } else {
+        let listener = TcpListener::bind(addr).await.expect("bind");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await
+            .expect("serve");
+    }
 }
