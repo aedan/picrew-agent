@@ -58,7 +58,8 @@ async fn main() {
     let addr: SocketAddr = format!("{}:{}", cli.host, cli.port)
         .parse()
         .expect("bind address");
-    tracing::info!("picrew-agent {name} listening on {addr} (hub connects here)");
+    tracing::info!("picrew-agent {name} {} listening on {addr} (hub connects here)", picrew_agent::VERSION);
+    tokio::spawn(picrew_agent::auto_update_loop());
     let listener = TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

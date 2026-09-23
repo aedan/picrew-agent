@@ -10,7 +10,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use tokio::process::Command;
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const DEFAULT_RELEASE: &str =
+    "https://github.com/aedan/picrew-agent/releases/latest/download/picrew-agent-x86_64-unknown-linux-musl";
 
 /// Inlined on first boot so a VM that cannot reach the hub still listens.
 pub const LISTEN_PY: &str = include_str!("../listen.py");
@@ -101,6 +106,7 @@ async fn info(State(agent): State<Agent>, headers: HeaderMap) -> impl IntoRespon
             "repos": repos,
             "opencode": agent.opencode,
             "hostname": hostname(),
+            "version": VERSION,
         })),
     )
         .into_response()
@@ -118,6 +124,7 @@ async fn rpc(
         "opencode" => opencode(&agent, body).await.into_response(),
         "exec" => exec(&agent, body.payload.unwrap_or(json!({}))).await.into_response(),
         "config" => config(body.payload.unwrap_or(json!({}))).await.into_response(),
+        "update" => update(body.payload.unwrap_or(json!({}))).await.into_response(),
         _ => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": "unknown kind" })),
@@ -263,6 +270,83 @@ async fn config(payload: Value) -> impl IntoResponse {
         }
     }
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+pub async fn update(payload: Value) -> impl IntoResponse {
+    match do_update(payload.get("url").and_then(|v| v.as_str())).await {
+        Ok(msg) => (StatusCode::OK, Json(json!({ "ok": true, "note": msg, "version": VERSION }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn do_update(url: Option<&str>) -> Result<String, String> {
+    let url = url
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_RELEASE);
+    let dest = std::env::current_exe().map_err(|e| e.to_string())?;
+    let tmp = dest.with_extension("new");
+    let bytes = reqwest::get(url)
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    if bytes.len() < 10_000 {
+        return Err("download was too small to be the agent".into());
+    }
+    tokio::fs::write(&tmp, &bytes).await.map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut p = std::fs::metadata(&tmp).map_err(|e| e.to_string())?.permissions();
+        p.set_mode(0o755);
+        std::fs::set_permissions(&tmp, p).map_err(|e| e.to_string())?;
+    }
+    tokio::fs::rename(&tmp, &dest).await.map_err(|e| e.to_string())?;
+    let _ = Command::new("systemctl")
+        .args(["restart", "picrew-agent"])
+        .status()
+        .await;
+    Ok(format!("replaced {} with latest from GitHub", dest.display()))
+}
+
+pub async fn auto_update_loop() {
+    loop {
+        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        match latest_tag().await {
+            Ok(tag) if tag != VERSION && tag != format!("v{VERSION}") => {
+                tracing::info!(tag, "newer picrew-agent on GitHub, updating");
+                if let Err(e) = do_update(None).await {
+                    tracing::warn!(error = %e, "self-update failed");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "could not check GitHub for agent updates"),
+        }
+    }
+}
+
+async fn latest_tag() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("picrew-agent")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let v: Value = client
+        .get("https://api.github.com/repos/aedan/picrew-agent/releases/latest")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    v.get("tag_name")
+        .and_then(|t| t.as_str())
+        .map(|s| s.trim_start_matches('v').to_string())
+        .ok_or_else(|| "no tag_name".into())
 }
 
 fn dirs_config() -> PathBuf {
